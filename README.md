@@ -1,4 +1,4 @@
-# Advanced Banking RAG System (100% Local Edition)
+# Advanced Banking RAG System (Local Deployment)
 
 An enterprise-grade Retrieval-Augmented Generation (RAG) pipeline tailored for banking credit risk policies. This system operates **entirely offline** with zero data leaving your machine, making it perfect for highly confidential financial environments.
 
@@ -17,7 +17,7 @@ An enterprise-grade Retrieval-Augmented Generation (RAG) pipeline tailored for b
 
 ---
 
-## 100% Local Architecture & Advanced Features
+## Local Architecture & Advanced Features
 
 1. **Local Embeddings (with Mirror Fallback):** Uses HuggingFace `sentence-transformers/all-MiniLM-L6-v2` to vectorize PDF chunks natively on the CPU. The script automatically routes traffic through `hf-mirror.com` to bypass corporate firewalls or regional timeouts.
 2. **Local Vector Database:** Uses `ChromaDB` running in *ephemeral (in-memory)* mode. This completely solves SQLite file-locking and sandbox crashes on macOS, providing a blazingly fast, stable database for local development. Retrieves the top `k=5` chunks to ensure sufficient context for cross-document queries.
