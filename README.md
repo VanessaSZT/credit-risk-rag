@@ -1,165 +1,185 @@
 # Advanced Banking RAG System (Local Deployment)
 
-An enterprise-grade Retrieval-Augmented Generation (RAG) pipeline tailored for banking credit risk policies. This system operates **entirely offline** with zero data leaving your machine, making it perfect for highly confidential financial environments.
+An enterprise-grade Retrieval-Augmented Generation (RAG) pipeline tailored for banking credit risk policies, **plus an LLM-as-Judge evaluation harness that scores the pipeline's own answers**. The system operates **entirely offline** with zero data leaving your machine, making it suitable for highly confidential financial environments.
+
+## What This Is
+
+This repository is a self-contained solution to a two-part take-home assignment:
+
+| Task | Deliverable | Where it lives |
+|---|---|---|
+| **1. Simple End-to-End RAG** — ingestion & chunking, embeddings & vector storage, retrieval, LLM generation | A runnable pipeline over 3 synthetic HK banking policy PDFs | `credit_risk_rag.py` (+ `generate_mock_data.py` for the corpus) |
+| **2. LLM-as-Judge Assessment Prompt** — a prompt that evaluates the RAG system's output, with explicitly specified judge inputs | The judge prompt **and** a harness that actually executes it against a golden dataset | `banking_revised_judge_prompt.md` + `evaluate.py` + `eval_dataset.json` |
+
+Everything runs locally: HuggingFace embeddings (CPU), in-memory ChromaDB, and Ollama for generation *and* judging. No API keys, no cloud calls.
+
+## Quickstart (one command)
+
+Prerequisite: **[Ollama](https://ollama.com)** installed and running (`ollama serve`). That's it — the script bootstraps everything else, including Python itself, via [uv](https://docs.astral.sh/uv/).
+
+```bash
+./run_e2e.sh
+```
+
+That single script (macOS/Linux) installs uv if missing, syncs a locked Python environment (`uv sync --frozen` — reproducible to the hash, no system Python or `python3-venv` required), verifies Ollama is up (pulling `llama3.1` if needed), generates the mock policy PDFs, runs the cross-document RAG demo query, and finishes with the full LLM-as-judge evaluation scorecard. Re-running skips completed steps. On Windows, follow the equivalent manual steps in [Setup & Execution](#setup--execution) below.
+
+Short on RAM or CPU? Run with a smaller model: `LOCAL_MODEL_NAME=llama3.2:3b ./run_e2e.sh`.
+
+Expected runtime on first run: a few minutes of downloads (CPU-only PyTorch wheel ~200MB, the MiniLM embedding model ~90MB, and the Ollama model if not yet pulled), then the inference phase. The lockfile pins Linux to CPU-only PyTorch, avoiding ~3GB of unused CUDA libraries that the default PyPI wheel would pull in.
+
+### System requirements & what to expect
+
+| | Default (`llama3.1`, 8B) | Light (`LOCAL_MODEL_NAME=llama3.2:3b`) |
+|---|---|---|
+| Free RAM during inference | ~6 GB | ~3 GB |
+| Disk (Ollama model) | ~4.9 GB | ~2 GB |
+| Full e2e on CPU (no GPU) | ~30–40 min | ~15–20 min |
+| Full e2e on Apple Silicon / GPU | ~3–5 min | ~2–3 min |
+
+Plus ~2 GB disk for the Python environment (`.venv/`) and ~100 MB of one-time caches. **Output cadence:** setup stages stream instantly; each LLM call then runs silently for 30s–2min on CPU before its result prints — the `[n/5]` progress lines during evaluation are the heartbeat. Don't Ctrl-C during a quiet stretch; it's thinking, not stuck.
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `Ollama is not reachable` | Install from [ollama.com](https://ollama.com), then `ollama serve` (the desktop app starts it automatically) |
+| Model pull fails / out of disk | `ollama pull llama3.2:3b` and re-run with `LOCAL_MODEL_NAME=llama3.2:3b` |
+| Inference extremely slow or machine swapping | Use the smaller model (see above) — the 8B default wants ~6 GB free RAM |
+| Embedding model download fails (`huggingface.co` blocked) | Opt into a mirror: `HF_ENDPOINT=https://hf-mirror.com ./run_e2e.sh` |
+| `uv: command not found` after the script installed it | Open a new shell, or `export PATH="$HOME/.local/bin:$PATH"` |
+| Windows | Use WSL for `run_e2e.sh`, or follow the manual `pip` steps in [Setup & Execution](#setup--execution) |
 
 ---
 
 ## Repository Structure & File Overview
 
+*   **`run_e2e.sh`**
+    One-command end-to-end runner (macOS/Linux): environment setup → Ollama preflight → data generation → RAG demo → judge evaluation. Idempotent; supports `LOCAL_MODEL_NAME=<model>` and `--skip-eval`.
 *   **`generate_mock_data.py`**
     A utility script that programmatically builds realistic, multi-page PDF documents. It uses the `fpdf2` library to format standard text into actual PDFs to simulate the messy reality of parsing corporate documents.
 *   **`credit_risk_rag.py`**
-    The core application. It loads the PDFs, splits them into semantic chunks while tracking page numbers and filenames, embeds them using a local HuggingFace model, saves them to ChromaDB, and queries a local Ollama LLM to answer complex risk questions.
+    The core application. It loads the PDFs, splits them into semantic chunks while tracking page numbers and filenames, embeds them using a local HuggingFace model, stores them in ChromaDB, **routes each query by intent (compliance check vs. informational)**, and queries a local Ollama LLM to answer complex risk questions with strict citations. Importable as a library (`CreditRiskRAG.ask()`) or runnable as a CLI.
+*   **`banking_revised_judge_prompt.md`**
+    The LLM-as-Judge system prompt. It explicitly declares which inputs the judge evaluates against (`original_query`, `retrieved_context`, optional `ground_truth`, `generated_answer`), scores four metrics (faithfulness, helpfulness, **citation accuracy**, operational efficiency/BLUF), raises banking-specific critical risk flags (PII leakage, fair-lending, AML tipping-off), and emits a deterministic PASS/FAIL verdict as JSON.
+*   **`evaluate.py`**
+    The evaluation harness that actually *executes* the judge prompt: it runs every case in the golden dataset through the RAG pipeline, sends the (query, retrieved context, ground truth, answer) tuple to a judge LLM, parses the JSON verdicts, and prints a scorecard. Exits non-zero on any FAIL, so it can gate CI.
+*   **`eval_dataset.json`**
+    A small golden dataset of 5 cases: cross-document violation detection, mathematical exception handling (LTV reduction), threshold extraction (UBO), stress-testing rules, and an intentionally **unanswerable question** to verify the system refuses rather than hallucinates.
+*   **`pyproject.toml` + `uv.lock` + `.python-version`**
+    The canonical dependency definition. `uv sync --frozen` reproduces the exact environment (hash-pinned lockfile, Python 3.12 auto-provisioned by uv, CPU-only PyTorch on Linux). No API-based SDKs — the stack is fully local.
 *   **`requirements.txt`**
-    The list of Python dependencies required to run the pipeline (e.g., `langchain`, `chromadb`, `sentence-transformers`, `fpdf2`, `pypdf`).
+    Fallback for plain `pip` users (e.g., on Windows without uv); mirrors the pins in `pyproject.toml`.
 *   **`data/` (Folder)**
-    The directory where the generated synthetic PDF policy documents are stored. The RAG pipeline continuously watches and ingests all PDFs in this folder.
+    Where the generated synthetic PDF policy documents live. Every PDF in this folder is ingested at startup.
 
 ---
 
 ## Local Architecture & Advanced Features
 
-1. **Local Embeddings (with Mirror Fallback):** Uses HuggingFace `sentence-transformers/all-MiniLM-L6-v2` to vectorize PDF chunks natively on the CPU. The script automatically routes traffic through `hf-mirror.com` to bypass corporate firewalls or regional timeouts.
-2. **Local Vector Database:** Uses `ChromaDB` running in *ephemeral (in-memory)* mode. This completely solves SQLite file-locking and sandbox crashes on macOS, providing a blazingly fast, stable database for local development. Retrieves the top `k=5` chunks to ensure sufficient context for cross-document queries.
-3. **Local LLM Generation:** Uses `Ollama` to run a conversational LLM (e.g., Llama 3.1) directly on local hardware.
-4. **Multi-Document Citations:** Reads all PDFs in a directory and strictly cites the *Document Name* and *Page Number* in the final assessment. A hardened system prompt forces the LLM to synthesize rules across multiple files without conflating them.
+1. **Local Embeddings:** Uses HuggingFace `sentence-transformers/all-MiniLM-L6-v2` to vectorize PDF chunks natively on the CPU (one-time ~90MB model download, cached afterwards). If `huggingface.co` is blocked on your network, opt into a mirror: `HF_ENDPOINT=https://hf-mirror.com ./run_e2e.sh`.
+2. **Local Vector Database:** `ChromaDB` in *ephemeral (in-memory)* mode, which sidesteps SQLite file-locking and sandbox crashes on macOS. Retrieves the top `k=5` chunks (tunable via `-k`) for cross-document queries.
+3. **Local LLM Generation:** `Ollama` runs the generator (default `llama3.1`, override with `--model` or `LOCAL_MODEL_NAME`) directly on local hardware. The pipeline **fails fast with actionable errors** if Ollama is unreachable or the model isn't pulled — before spending time on embedding.
+4. **LLM-Based Intent Routing:** Each query is first classified as `compliance` (a concrete deal/client scenario to adjudicate) or `informational` (a question about what the policy says). Compliance queries get the hardened "list every violation" prompt; informational queries get a direct-answer prompt — eliminating the awkward "Policy Violation: None found" boilerplate on simple lookups.
+5. **Single-Pass Retrieval:** Chunks are retrieved once per query; the same set is displayed to the user, fed to the generator, and handed to the judge — so what you audit is exactly what the model saw.
+6. **Multi-Document Citations:** The prompt forces strict `[Document Name - Page N]` citations sourced from chunk metadata, and the judge independently verifies every citation exists in the retrieved context and supports its claim.
 
 ---
 
 ## The `data/` Folder & How Data is Mocked
 
-The data is procedurally generated via `generate_mock_data.py` to prove that the pipeline can handle native PDF ingestion rather than clean, pre-formatted Markdown. 
+The data is procedurally generated via `generate_mock_data.py` to prove that the pipeline handles native PDF ingestion rather than clean, pre-formatted Markdown.
 
-The `data/` folder contains three synthetic policies containing overlapping risk criteria:
+The `data/` folder contains three synthetic policies with overlapping risk criteria:
 
-1.  **`HK_Commercial_Real_Estate_Policy_2024.pdf`**
-    Contains limits for Loan-to-Value (LTV) and Debt Service Coverage Ratios (DSCR) based on property type (e.g., Grade A Office vs. Retail). Includes rules on HKMA stress testing and strict limits on non-recourse lending.
-2.  **`SME_Unsecured_Lending_Guidelines.pdf`**
-    Dictates terms for unsecured business loans. Defines hard constraints: Max loan of HKD 5,000,000, Max tenor of 60 months, strict prohibition on restricted industries, and mandatory personal guarantees.
-3.  **`AML_KYC_Compliance_Manual.pdf`**
-    Outlines Financial Crime Compliance (FCC) rules. Defines Ultimate Beneficial Owner (UBO) verification thresholds (25% for standard risk, 10% for high risk) and outlines extreme constraints for Politically Exposed Persons (PEPs).
-
----
-
-## Example RAG Processes & Supported Queries
-
-Because the vector database indexes all three documents, the RAG system supports complex, cross-document reasoning. You can modify the `query` variable in `credit_risk_rag.py` to ask various questions.
-
-### Example 1: Cross-Document Policy Violations
-**User Query:** 
-> "A client wants an unsecured SME loan of HKD 8 million for 72 months. One of their directors is a Politically Exposed Person (PEP). What are the policy violations here according to the SME and AML guidelines?"
-
-**Retrieved Context (Top 5 Chunks):**
-*   `[Source Metadata: SME_Unsecured_Lending_Guidelines.pdf - Page 1]` (Loan Limits)
-*   `[Source Metadata: SME_Unsecured_Lending_Guidelines.pdf - Page 1]` (Tenor & Repayment)
-*   `[Source Metadata: HK_Commercial_Real_Estate_Policy_2024.pdf - Page 1]` (Guarantors)
-*   `[Source Metadata: HK_Commercial_Real_Estate_Policy_2024.pdf - Page 1]` (LTV Matrix)
-*   `[Source Metadata: AML_KYC_Compliance_Manual.pdf - Page 1]` (UBO & Scope)
-
-**LLM Output (from local Ollama - llama3.1):**
-> Based on the provided context, I have identified the following policy violations:
-> 
-> 1. **Loan Limit Exceeded**: The client's requested loan amount of HKD 8 million exceeds the maximum allowed limit of HKD 5,000,000 as stated in [SME_Unsecured_Lending_Guidelines.pdf - Page 1].
-> 2. **Tenor Exceeded**: The client's requested tenor of 72 months exceeds the maximum allowed tenor of 60 months (5 years) as stated in [SME_Unsecured_Lending_Guidelines.pdf - Page 1].
-> 3. **PEP Requirement Not Met**: As one of the directors is a Politically Exposed Person (PEP), we must identify and verify the identity of any individual holding a 25% or greater ownership stake, according to [AML_KYC_Compliance_Manual.pdf - Page 1]. However, this requirement may not be applicable for SME unsecured facilities as there is no specific mention of PEP requirements in [SME_Unsecured_Lending_Guidelines.pdf - Page 1].
-> 4. **Guarantor Requirement Not Met**: Although the policy requires a personal guarantee from the primary business owners, it does not specify any additional requirements for PEPs or high-risk clients.
-> 
-> **Policy Violations:**
-> * Loan Limit Exceeded (SME_Unsecured_Lending_Guidelines.pdf - Page 1)
-> * Tenor Exceeded (SME_Unsecured_Lending_Guidelines.pdf - Page 1)
-> * PEP Requirement Not Met (AML_KYC_Compliance_Manual.pdf - Page 1)
-
-### Example 2: Mathematical Reasoning & Exceptions
-**User Query:** 
-> "What is the maximum LTV for a Grade A office in Central valued at HKD 600 million?"
-
-**LLM Output (from local Ollama - llama3.1):**
-> According to [HK_Commercial_Real_Estate_Policy_2024.pdf - Page 1], the maximum LTV for a Grade A Office (Central/Admiralty) is 50%.
-> 
-> However, since the property value exceeds HKD 500 million, we must apply the note on page 1 of the same document: "Note: For properties valued over HKD 500 million, the Max LTV is automatically reduced by 10% from the baseline."
-> 
-> Therefore, the maximum LTV for a Grade A office in Central valued at HKD 600 million would be 50% - 10% = 40%.
-> 
-> Policy Violation:
-> - The policy does not specify this.
-
-### Example 3: KYC/UBO Extraction (Current Script Output)
-**User Query:** 
-> "We are onboarding a standard risk corporate client. They have three owners holding 30%, 20%, and 50% stakes respectively. Which individuals must have their identities verified?"
-
-**LLM Output (from local Ollama - llama3.1):**
-> According to [AML_KYC_Compliance_Manual.pdf - Page 1], for Standard Risk Corporate Clients, we must identify and verify the identity of any individual holding a 25% or greater ownership stake.
->
-> Since two owners hold more than 25% (30% and 50%), their identities must be verified. The owner with a 20% stake does not meet this threshold.
->
-> Therefore, the individuals who must have their identities verified are:
-> * Owner with 30% stake
-> * Owner with 50% stake
->
-> Policy Violation: None found in this context.
+1.  **`HK_Commercial_Real_Estate_Policy_2024.pdf`** — LTV and DSCR limits by property type, the >HKD 500M LTV reduction rule, HKMA-style stress testing (+200bps, stressed DSCR ≥ 1.0x), and non-recourse lending restrictions.
+2.  **`SME_Unsecured_Lending_Guidelines.pdf`** — hard constraints for unsecured business loans: max HKD 5,000,000, max 60-month tenor, restricted industries, mandatory personal guarantees.
+3.  **`AML_KYC_Compliance_Manual.pdf`** — UBO verification thresholds (25% standard risk, 10% high risk), PEP Enhanced Due Diligence with FCC/CRO sign-off, and SAR triggers.
 
 ---
 
 ## Setup & Execution
 
+> **Shortcut (macOS/Linux):** `./run_e2e.sh` performs all of the steps below in one go. The manual steps are listed for Windows users and for anyone who wants to run the stages individually.
+
 ### 1. Prerequisites
-*   **Python 3.9+** installed on your machine.
-*   **Ollama** installed (Download from [ollama.com](https://ollama.com/)).
+*   **Ollama** installed (download from [ollama.com](https://ollama.com/))
+*   **uv** ([install docs](https://docs.astral.sh/uv/getting-started/installation/)) — provisions Python 3.12 and the locked environment automatically. *Alternative:* any Python 3.10+ with plain `pip` and `requirements.txt`.
+
+**macOS notes:** `brew install ollama uv` covers both prerequisites (or use the ollama.com app, which auto-starts the server — no `ollama serve` needed). Apple Silicon runs the models on the Metal GPU, so expect the fast column in the timing table. Intel Macs are supported too — the lockfile pins `torch 2.2.2` there (the last release with Intel-macOS wheels), which uv selects automatically.
 
 ### 2. Prepare the Local LLM (Ollama)
-Before running the Python script, pull the language model. Open a terminal/command prompt and run:
 ```bash
-ollama run llama3.1
+ollama pull llama3.1        # or a smaller model, e.g.: ollama pull llama3.2:3b
 ```
-*(Once it finishes downloading and gives you a chat prompt, you can type `/bye` to exit. The Ollama service will remain running in the background).* 
+*(Make sure the Ollama service is running afterwards — `ollama serve` if it isn't already.)*
 
-### 3. Setup the Python Environment
+### 3. Set Up the Python Environment
 
-**For Windows:**
-Open Command Prompt or PowerShell in the `Assignment1` folder and run:
+**With uv (any OS):**
+```bash
+uv sync --frozen
+```
+
+**Plain pip fallback (e.g., Windows):**
 ```cmd
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
 ```
-
-**For macOS / Linux:**
-Open Terminal in the `Assignment1` folder and run:
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
+*(On Linux with pip, first run `pip install torch --index-url https://download.pytorch.org/whl/cpu` to avoid ~3GB of CUDA downloads.)*
 
 ### 4. Run the Pipeline
-With your virtual environment activated, generate the mock data and run the pipeline!
-
 ```bash
 # Generate the PDF files in the data/ directory
-python generate_mock_data.py
+uv run generate_mock_data.py
 
-# Run the cross-document RAG query
-python credit_risk_rag.py
+# Run the built-in cross-document demo query
+uv run credit_risk_rag.py
+
+# Ask your own question (with retrieved chunks shown)
+uv run credit_risk_rag.py --show-context "What is the max LTV for a Grade A office in Central valued at HKD 600 million?"
+
+# Interactive REPL over the policy corpus
+uv run credit_risk_rag.py --interactive
 ```
+*(pip users: replace `uv run` with `python` inside the activated venv.)*
+
+### 5. Evaluate with LLM-as-Judge
+```bash
+# Judge every golden case (judge model defaults to the generator model)
+uv run evaluate.py
+
+# Better practice: judge with a stronger/different model to avoid self-preference bias
+uv run evaluate.py --judge-model qwen2.5
+
+# Debug a single case
+uv run evaluate.py --case ltv_math_exception
+```
+The harness prints a scorecard (0–2 per metric, per case), average scores, critical-flag counts, and a PASS/FAIL verdict per case, followed by the judge's full JSON rationales. It exits non-zero if any case fails, so it can gate a CI pipeline.
+
+**Judge inputs (explicitly specified in the prompt):** the judge compares the `generated_answer` against the `original_query`, the `retrieved_context` snippets, and the `ground_truth` when available — and is instructed that its own world knowledge must never override the retrieved context.
+
+**Metrics:** ① Faithfulness/hallucination ② Helpfulness/ground-truth alignment (with a `null` path for correct refusals) ③ Citation accuracy (fabricated citations are an automatic fail) ④ Operational efficiency/BLUF. Plus circuit-breaker flags for PII leakage, fair-lending violations, and AML tipping-off.
+
+**Trust-but-verify:** each critical flag must carry a verbatim quote from the generated answer as evidence. The harness checks that quote programmatically — a flag whose "evidence" doesn't actually appear in the answer is discarded (marked `*` in the scorecard), and the PASS/FAIL verdict is recomputed from the prompt's deterministic rule rather than taken from the judge. This was added after observing a small judge model (llama3.2:3b) assert an AML tipping-off flag while "quoting" the rubric instead of the answer.
 
 ---
 
-## Evaluation & Production Roadmap
+## Example Queries Supported
 
-While this system successfully demonstrates 100% local, offline multi-document reasoning, it is an MVP. Before deploying to a production banking environment, the following architectural improvements must be implemented:
+*   **Cross-document policy violations:** *"A client wants an unsecured SME loan of HKD 8 million for 72 months. One of their directors is a PEP. What are the policy violations?"* → routed to the **compliance** prompt; synthesizes SME limits + AML PEP rules with citations.
+*   **Mathematical reasoning & exceptions:** *"What is the maximum LTV for a Grade A office in Central valued at HKD 600 million?"* → routed to the **informational** prompt; applies the >HKD 500M reduction note (50% − 10% = 40%) without appending a spurious violations section.
+*   **Threshold extraction:** *"Three owners hold 30%, 20%, and 50%. Which must be verified?"* → applies the 25% UBO threshold to each stake.
+*   **Correct refusal:** *"What is the maximum credit card limit for private banking clients?"* → not in any policy; the grounded prompt forces *"The policy does not specify this."*
 
-### 1. Intent Routing (Dynamic Prompting)
-Notice in Example 2 and Example 3 how the LLM awkwardly added: *"Policy Violation: The policy does not specify this"* or *"Policy Violation: None found in this context"* at the end? Because the system prompt is statically hardened to search for "Policy Violations," if a user asks a purely informational question (e.g., "What is the LTV limit?" or "Who needs to be verified?"), the LLM will blindly obey the prompt and attempt to list violations that don't exist. 
-**Improvement:** Implement an LLM-based Intent Classifier that routes queries to specific prompts (e.g., `Informational Prompt` vs. `Underwriting Compliance Prompt`).
+---
 
-### 2. Self-Querying Retrieval (Metadata Filtering)
-The vector search currently relies purely on semantic similarity across the entire database. This means a query about "Commercial Real Estate" might accidentally retrieve chunks from the "SME Lending" policy if the keywords align.
-**Improvement:** Introduce a query-analyzer that translates the user's natural language into strict metadata filters (e.g., `filter={"source": "HK_Commercial_Real_Estate_Policy_2024.pdf"}`).
+## Production Roadmap
 
-### 3. Agentic RAG for Mathematical Constraints
-Banking policies rely heavily on math (e.g., reducing LTV by 10%, calculating DSCR coverage, threshold comparisons). Standard LLMs hallucinate arithmetic.
-**Improvement:** Upgrade the LangChain pipeline to an Agent that has access to a `Calculator` or `Python REPL` tool, allowing the LLM to offload policy math to deterministic code.
+This MVP demonstrates 100% local, offline multi-document reasoning with a built-in evaluation loop. Remaining architectural improvements before a production banking deployment:
 
-### 4. Decoupled Vector Database Architecture
-Currently, the script ingests PDFs and rebuilds the Chroma database in-memory on every run to avoid SQLite locking issues.
-**Improvement:** Decouple ingestion from querying. Deploy a centralized Vector Database (e.g., Milvus or Qdrant via Docker) and build an asynchronous data pipeline that only embeds newly updated policies using document hashing.
+1. ~~**Intent Routing (Dynamic Prompting)**~~ — **Implemented.** An LLM-based classifier routes queries to a `Compliance` or `Informational` prompt, so informational lookups no longer receive forced violation analyses.
+2. **Self-Querying Retrieval (Metadata Filtering)** — semantic search currently spans the whole corpus; a query analyzer should translate natural language into metadata filters (e.g., `filter={"source": "HK_Commercial_Real_Estate_Policy_2024.pdf"}`) to prevent cross-policy bleed.
+3. **Agentic RAG for Mathematical Constraints** — banking policy math (LTV reductions, DSCR coverage) should be offloaded to a calculator/Python tool rather than trusted to LLM arithmetic. Note the judge already independently re-verifies arithmetic, so failures here are *detected* even before they are *prevented*.
+4. **Decoupled Vector Database Architecture** — ingestion currently rebuilds the in-memory Chroma index on every run. Production should deploy a centralized vector DB (Milvus/Qdrant) with an asynchronous pipeline that re-embeds only changed documents via content hashing.
+5. **Larger Golden Dataset & Judge Calibration** — extend `eval_dataset.json` with adversarial cases (near-miss numbers, conflicting policies) and periodically spot-check judge verdicts against human review; use a stronger judge model than the generator to avoid self-preference bias.

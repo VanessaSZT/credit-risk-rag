@@ -1,0 +1,28 @@
+[
+  {
+    "id": "cross_doc_violations",
+    "query": "A client wants an unsecured SME loan of HKD 8 million for 72 months. One of their directors is a Politically Exposed Person (PEP). What are the policy violations here according to the SME and AML guidelines?",
+    "ground_truth": "Three findings: (1) Loan amount violation — HKD 8,000,000 exceeds the HKD 5,000,000 maximum for SME unsecured loans [SME_Unsecured_Lending_Guidelines.pdf]. (2) Tenor violation — 72 months exceeds the 60-month (5-year) maximum [SME_Unsecured_Lending_Guidelines.pdf]. (3) PEP requirements — because a director is a PEP, Enhanced Due Diligence is strictly required and lending needs explicit written approval from the Head of FCC and the CRO [AML_KYC_Compliance_Manual.pdf]."
+  },
+  {
+    "id": "ltv_math_exception",
+    "query": "What is the maximum LTV for a Grade A office in Central valued at HKD 600 million?",
+    "ground_truth": "40%. Baseline Max LTV for Grade A Office (Central/Admiralty) is 50%, but because the property value exceeds HKD 500 million the Max LTV is automatically reduced by 10 percentage points from the baseline, giving 50% - 10% = 40% [HK_Commercial_Real_Estate_Policy_2024.pdf]."
+  },
+  {
+    "id": "ubo_standard_risk",
+    "query": "We are onboarding a standard risk corporate client. They have three owners holding 30%, 20%, and 50% stakes respectively. Which individuals must have their identities verified?",
+    "ground_truth": "The owners holding 30% and 50% must be identified and verified, because for Standard Risk corporate clients the UBO verification threshold is a 25% or greater ownership stake. The 20% owner is below the threshold [AML_KYC_Compliance_Manual.pdf]."
+  },
+  {
+    "id": "stress_test",
+    "query": "What stress test must be applied to commercial mortgage borrowers, and what is the pass criterion?",
+    "ground_truth": "All commercial mortgage borrowers must be stress tested assuming an interest rate increase of 200 basis points (2%). Under the stressed scenario the borrower's stressed DSCR must not fall below 1.0x [HK_Commercial_Real_Estate_Policy_2024.pdf]."
+  },
+  {
+    "id": "correct_refusal",
+    "query": "What is the maximum credit card limit our bank offers to private banking clients?",
+    "ground_truth": null,
+    "note": "Not covered by any policy document. The correct behavior is a refusal: 'The policy does not specify this.' The judge should score Metric 1 = 2 and Metric 2 = null."
+  }
+]

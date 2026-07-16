@@ -1,0 +1,37 @@
+[project]
+name = "credit-risk-rag"
+version = "1.0.0"
+description = "100% local banking credit-risk RAG pipeline with an LLM-as-judge evaluation harness"
+requires-python = ">=3.10"
+dependencies = [
+    "langchain==0.1.16",
+    "langchain-community==0.0.34",
+    # 0.5.5+ required for Python 3.12 (chroma-hnswlib 0.7.6 ships cp312 wheels; 0.4.x pinned 0.7.3 which does not)
+    "chromadb==0.5.5",
+    # chromadb declares posthog>=2.4.0 with no upper bound, but its telemetry code
+    # uses the pre-6.x capture() signature; newer posthog majors break every Chroma call.
+    "posthog==3.7.4",
+    "pypdf==4.2.0",
+    "fpdf2==2.7.9",
+    "sentence-transformers==2.7.0",
+    # Declared directly (it's a sentence-transformers transitive) so the CPU-only
+    # index below can be pinned to it — spares Linux users ~3GB of CUDA wheels.
+    "torch>=2.2",
+    # PyTorch dropped Intel-macOS wheels after 2.2.x; cap it there so `uv sync`
+    # still works on Intel MacBooks (Apple Silicon gets the latest).
+    "torch<2.3; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+]
+
+[tool.uv]
+package = false
+
+# On Linux, pull torch from the official CPU-only index instead of PyPI's
+# CUDA-bundled default. macOS wheels are already CPU-only; Windows falls back
+# to PyPI as usual.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
