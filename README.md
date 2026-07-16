@@ -105,7 +105,7 @@ The `data/` folder contains three synthetic policies with overlapping risk crite
 *   **Ollama** installed (download from [ollama.com](https://ollama.com/))
 *   **uv** ([install docs](https://docs.astral.sh/uv/getting-started/installation/)) — provisions Python 3.12 and the locked environment automatically. *Alternative:* any Python 3.10+ with plain `pip` and `requirements.txt`.
 
-**macOS notes:** `brew install ollama uv` covers both prerequisites (or use the ollama.com app, which auto-starts the server — no `ollama serve` needed). Apple Silicon runs the models on the Metal GPU, so expect the fast column in the timing table. Intel Macs are supported too — the lockfile pins `torch 2.2.2` there (the last release with Intel-macOS wheels), which uv selects automatically.
+**macOS notes:** `brew install --cask ollama && brew install uv` covers both prerequisites. The Ollama *app* (cask, or the ollama.com download) runs a menu-bar agent that starts the API server automatically — no `ollama serve` needed. If you instead install the bare CLI (`brew install ollama`, the formula), you must start the server yourself: `ollama serve` or `brew services start ollama`. Apple Silicon runs the models on the Metal GPU, so expect the fast column in the timing table. Intel Macs are supported too — the lockfile pins `torch 2.2.2` there (the last release with Intel-macOS wheels), which uv selects automatically.
 
 ### 2. Prepare the Local LLM (Ollama)
 ```bash
